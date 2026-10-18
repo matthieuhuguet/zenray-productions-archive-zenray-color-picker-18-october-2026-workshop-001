@@ -6,19 +6,7 @@
 	<dict>
 		<key>Resources/AppIcon.icns</key>
 		<data>
-		rMEUnCkuR21NR++AzGY4E2CXuMs=
-		</data>
-		<key>Resources/Fonts/AnthropicMono-Regular.ttf</key>
-		<data>
-		FrY/KEkrVnGsh8U3sjsg+3tVPRQ=
-		</data>
-		<key>Resources/Fonts/AnthropicSerif-Regular.ttf</key>
-		<data>
-		rymDnNcTglm94OpE9X98QB172tU=
-		</data>
-		<key>Resources/Fonts/InterVariable.ttf</key>
-		<data>
-		QZQUFabejz3HdoIsz6ApUWFdQ1s=
+		gRrXcd9EKhtS1hRi7yWt8PH4NJ0=
 		</data>
 		<key>Resources/MigratedColors.json</key>
 		<data>
@@ -26,7 +14,7 @@
 		</data>
 		<key>Resources/Settings.json</key>
 		<data>
-		x82pw1Xd9z74AaUg6BgUq4Shqr8=
+		t+/fVYxl9uBsyfrc4YRx0oSAcJQ=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -35,28 +23,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			yZAjIKUnFflUvt9Vdipt244MCcY2cFXt7SyUy5w429k=
-			</data>
-		</dict>
-		<key>Resources/Fonts/AnthropicMono-Regular.ttf</key>
-		<dict>
-			<key>hash2</key>
-			<data>
-			Aa/Rgl1mydN2x4yE64ntSHB+dMsn/fGc7OIxJC8vekY=
-			</data>
-		</dict>
-		<key>Resources/Fonts/AnthropicSerif-Regular.ttf</key>
-		<dict>
-			<key>hash2</key>
-			<data>
-			rq0fmEamva8rQ1AJBZX0uCcNo1tv/Z+H4eV20wv7yME=
-			</data>
-		</dict>
-		<key>Resources/Fonts/InterVariable.ttf</key>
-		<dict>
-			<key>hash2</key>
-			<data>
-			SYmxJZJJkbkNBbLRbg44jEj31buLMFObv5x1UnjQzK8=
+			7dP9w9P65KouuJ2YSl9rTYY9haCrgqqIG6/2Qp2pEy4=
 			</data>
 		</dict>
 		<key>Resources/MigratedColors.json</key>
@@ -70,7 +37,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			0lARafMquWBydQTxomzgIy6xQODlg8KYS3O/B+/leFk=
+			Gar3kmOphNeIP2DIxgOnd8EnJH0gxQNi6qNtqsEDVkE=
 			</data>
 		</dict>
 	</dict>
