@@ -1,0 +1,43 @@
+{
+  "backgroundHex" : "#1f1f1e",
+  "bundleId" : "com.zenray.colorpicker",
+  "checkedAt" : "2026-10-18T18:17:40Z",
+  "contrastRatio" : 8.89,
+  "cornerRadius" : 14,
+  "design" : "C · Micro-Barre HUD",
+  "dotSize" : 11,
+  "fontsLoaded" : {
+    "AnthropicMono-Regular" : true,
+    "AnthropicSerif-Regular" : true,
+    "InterVariable" : true
+  },
+  "foregroundHex" : "#afc1cc",
+  "formats" : {
+    "3D" : "0.43, 0.53, 0.60",
+    "HEX" : "#afc1cc",
+    "OKLCH" : "oklch(0.80 0.03 235°)",
+    "RGB" : "rgb(175, 193, 204)"
+  },
+  "gapIn" : 5,
+  "gapOut" : 14,
+  "globalHotkeys" : {
+    "pipette" : "Control+Option+C (⌃⌥C)",
+    "toggleHUD" : "Control+Option+P (⌃⌥P)"
+  },
+  "historyCount" : 6,
+  "launchAtLogin" : true,
+  "monoSize" : 13,
+  "optionCommandCConflictRemoved" : true,
+  "padding" : 14,
+  "residentMemoryBytes" : 75513856,
+  "resolvedFonts" : {
+    "mono" : "AnthropicMono-Regular",
+    "sans" : "InterVariable",
+    "serif" : "AnthropicSerif-Regular"
+  },
+  "settingsPath" : "\/Users\/zenray\/Library\/Application Support\/ZenRayColorPicker\/Settings.json",
+  "trafficLightIconsCount" : 3,
+  "wcagLevel" : "AAA",
+  "windowHeight" : 104,
+  "windowWidth" : 296
+}
