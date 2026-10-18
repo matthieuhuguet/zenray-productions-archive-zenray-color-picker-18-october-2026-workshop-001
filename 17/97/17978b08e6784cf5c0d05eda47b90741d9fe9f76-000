@@ -477,6 +477,14 @@
     justify-content: space-between;
   }
 
+  .a-footer-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--ink-2);
+  }
+
   /* ==========================================================================
      DESIGN B · Fiche Suisse Typographique (252 x 152 px)
      Zéro boîte interne : 2 cercles qui se chevauchent + 4 lignes mono alignées
@@ -497,8 +505,8 @@
   }
 
   .b-circle-fg {
-    width: 26px;
-    height: 26px;
+    width: 24px;
+    height: 24px;
     border-radius: 999px;
     background: var(--fg-color);
     cursor: pointer;
@@ -506,11 +514,12 @@
   }
 
   .b-circle-bg {
-    width: 20px;
-    height: 20px;
+    width: 22px;
+    height: 22px;
     border-radius: 999px;
     background: var(--bg-color);
-    margin-left: -7px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+    margin-left: -6px;
     cursor: pointer;
     z-index: 1;
   }
@@ -737,7 +746,6 @@
             <div class="a-half bg" data-copy-role="bg" title="Cliquer pour copier ou pipeter BG">
               <span class="mono" data-bind="bg-hex">#1f1f1e</span>
             </div>
-            <div class="a-contrast-badge"><span class="num" data-bind="ratio">6.17</span> · AA</div>
           </div>
 
           <div class="a-formats" role="tablist">
@@ -750,9 +758,12 @@
 
           <div class="a-footer">
             <div class="dots-row" data-dots-container></div>
-            <button class="eyedrop-btn" type="button" title="Pipette (⇧⌘C)">
-              <svg viewBox="0 0 24 24"><path d="m14 4 6 6-2 2-6-6 2-2z"/><path d="M12 6 4 14v6h6l8-8"/></svg>
-            </button>
+            <div class="a-footer-right">
+              <span><span class="num" data-bind="ratio">6.17</span></span>
+              <button class="eyedrop-btn" type="button" title="Pipette (⇧⌘C)">
+                <svg viewBox="0 0 24 24"><path d="m14 4 6 6-2 2-6-6 2-2z"/><path d="M12 6 4 14v6h6l8-8"/></svg>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -952,7 +963,7 @@
     document.documentElement.style.setProperty('--fg-color', state.fg);
     document.documentElement.style.setProperty('--bg-color', state.bg);
     const fgLum = luminance(state.fg);
-    document.documentElement.style.setProperty('--fg-text-on-swatch', fgLum > 0.36 ? '#161616' : '#f7f7f5');
+    document.documentElement.style.setProperty('--fg-text-on-swatch', fgLum > 0.179 ? '#161616' : '#f7f7f5');
 
     const { r, g, b } = hexToRgb(state.fg);
     const lr = srgbToLinear(r).toFixed(2), lg = srgbToLinear(g).toFixed(2), lb = srgbToLinear(b).toFixed(2);
