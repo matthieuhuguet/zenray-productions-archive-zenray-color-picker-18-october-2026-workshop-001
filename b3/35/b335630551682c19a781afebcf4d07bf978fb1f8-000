@@ -1,0 +1,34 @@
+# ZenRayColorPicker (18 October 2026)
+
+## Architecture et légèreté (18 October 2026)
+
+- Application native macOS en Swift pur (`AppKit`, `Carbon`, `CoreText`) remplaçant Pika (18 October 2026).
+- Binaire exécutable compilé à `269 Kio` contre `9,6 Mio` pour Pika, sans aucune dépendance externe ni demande de permission Screen Recording grâce à `NSColorSampler` natif macOS (18 October 2026).
+- Les 20 couleurs de l'historique Pika ont été extraites avant désinstallation et migrées dans `Sources/pika-migrated-colors.json` (18 October 2026).
+
+## Trio typographique ZenRay embarqué (18 October 2026)
+
+- `InterVariable` (Regular 400) : étiquettes d'interface, boutons, libellés WCAG et contrôles HDA (18 October 2026).
+- `AnthropicSerif-Regular` (Regular 400) : titres (`ZenRay Color Picker`, `Paramètres HDA`) et tous les nombres visibles (`2.59 : 1`, `20`, `404`, `13`, segments `2 / 3 / 4`) (18 October 2026).
+- `AnthropicMono-Regular` (Regular 400) : codes techniques copiables (`#b62721`, `rgb(182, 39, 33)`, `hsl(2, 69%, 42%)`, `oklch(0.508 0.180 28.1)`, `{0.468, 0.020, 0.015}` pour Houdini Copernicus / Karma / Unreal Engine) (18 October 2026).
+- Les trois fichiers `.ttf` sont embarqués dans `Contents/Resources/Fonts/` et enregistrés au lancement par `CTFontManagerRegisterFontsForURL` pour éviter tout repli silencieux (18 October 2026).
+
+## Interface de paramètres HDA (18 October 2026)
+
+| # | Paramètre | Plage / Valeurs | Défaut | Rôle (18 October 2026) |
+|---|---|---|---|---|
+| 1 | `defaultFormat` | `HEX`, `RGB`, `HSL`, `OKLCH`, `LINEAR` | `HEX` | Format copié automatiquement après la pipette (18 October 2026) |
+| 2 | `autoCopyOnPick` | `true` / `false` | `true` | Copie automatique dans le presse-papiers (18 October 2026) |
+| 3 | `lowercaseHex` | `true` / `false` | `true` | Formatage hexadécimal en minuscules `#b62721` (18 October 2026) |
+| 4 | `floatPrecision` | `2`, `3`, `4` | `3` | Décimales pour `Linear 3D` et `OKLCH` (18 October 2026) |
+| 5 | `historyLimit` | `10` à `40` | `20` | Nombre de pastilles conservées dans l'historique (18 October 2026) |
+| 6 | `windowWidth` | `360` à `480` pt | `404` | Largeur du panneau en points (18 October 2026) |
+| 7 | `fontSize` | `11` à `16` pt | `13` | Corps de base `--zr-ui-base` de l'interface (18 October 2026) |
+| 8 | `pickOnMenuClick` | `true` / `false` | `false` | Lancer la pipette directement au clic gauche sur l'icône de barre des menus (18 October 2026) |
+
+## Commandes et raccourcis (18 October 2026)
+
+- Raccourci global pipette directe : `⌘⇧C` (ou clic droit sur l'icône `eyedropper.halffull` de la barre des menus) (18 October 2026).
+- Raccourci global ouvrir / fermer le panneau : `⌥⌘C` (ou clic gauche sur l'icône de la barre des menus) (18 October 2026).
+- Modifier les paramètres sans recompiler : cliquer sur le bouton `HDA` dans l'application, ou éditer `/Users/zenray/Library/Application Support/ZenRayColorPicker/Settings.json` (18 October 2026).
+- Recompiler et réinstaller : `node /Users/zenray/.claude/tmp/tmp-zenray-color-picker-18-october-2026/Scripts/BuildAndInstall.mjs` (18 October 2026).

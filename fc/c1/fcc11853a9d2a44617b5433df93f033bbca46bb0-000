@@ -292,6 +292,16 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
     var stateURL: URL { appSupportDir.appendingPathComponent("State.json") }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if ProcessInfo.processInfo.environment["ZENRAY_PICKER_PROOF"] == nil {
+            let running = NSRunningApplication.runningApplications(withBundleIdentifier: "com.zenray.colorpicker")
+            if running.count > 1 {
+                for app in running where app.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                    app.activate(options: [.activateAllWindows])
+                }
+                NSApp.terminate(nil)
+                return
+            }
+        }
         sharedPickerApp = self
         try? FileManager.default.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
 
@@ -326,6 +336,12 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
         return true
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if !window.isVisible {
+            showWindowBelowStatusItem()
+        }
+    }
+
     // 18 October 2026: Register bundled TTF fonts from Contents/Resources/Fonts so fallback is never silent.
     func registerBundledFonts() {
         let fontsDir = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Fonts")
@@ -347,7 +363,7 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
                 lowercaseHex: true,
                 floatPrecision: 3,
                 historyLimit: 20,
-                windowWidth: 368,
+                windowWidth: 404,
                 fontSize: 13,
                 pickOnMenuClick: false,
                 alwaysOnTop: true,
@@ -418,7 +434,7 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
 
         fontSans = rawSans ?? NSFont.systemFont(ofSize: sz, weight: .regular)
         fontSerif = rawSerif ?? NSFont.systemFont(ofSize: sz, weight: .regular)
-        fontSerifTitle = NSFont(name: settings.fontSerif, size: sz + 3.0) ?? fontSerif
+        fontSerifTitle = NSFont(name: settings.fontSerif, size: sz + 2.5) ?? fontSerif
         fontMono = rawMono ?? NSFont.monospacedSystemFont(ofSize: sz, weight: .regular)
     }
 
@@ -441,7 +457,7 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
     }
 
     func setupWindow() {
-        let w = CGFloat(max(320.0, min(460.0, settings.windowWidth)))
+        let w = CGFloat(max(360.0, min(480.0, settings.windowWidth)))
         window = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: w, height: 460),
             styleMask: [.titled, .closable, .fullSizeContentView, .nonactivatingPanel],
@@ -517,7 +533,7 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
     }
 
     func showWindowBelowStatusItem() {
-        let w = CGFloat(max(320.0, min(460.0, settings.windowWidth)))
+        let w = CGFloat(max(360.0, min(480.0, settings.windowWidth)))
         let h = window.frame.height
         if let button = statusItem.button, let btnWin = button.window {
             let btnFrame = btnWin.frame
@@ -543,7 +559,7 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
         if wasVisible {
             window.orderOut(nil)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
             let sampler = NSColorSampler()
             sampler.show { [weak self] selectedColor in
                 guard let self = self else { return }
@@ -620,6 +636,8 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
         btn.toolTip = toolTip
         btn.target = self
         btn.action = action
+        btn.setContentCompressionResistancePriority(.required, for: .horizontal)
+        btn.setContentHuggingPriority(.required, for: .horizontal)
         if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: toolTip) {
             btn.image = img
             btn.imagePosition = title == nil ? .imageOnly : .imageLeading
@@ -630,7 +648,7 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
 
     func rebuildUI() {
         rebuildFonts()
-        let contentWidth = CGFloat(max(320.0, min(460.0, settings.windowWidth))) - 28.0
+        let contentWidth = CGFloat(max(360.0, min(480.0, settings.windowWidth))) - 28.0
         for sub in rootStack.arrangedSubviews {
             rootStack.removeArrangedSubview(sub)
             sub.removeFromSuperview()
@@ -648,6 +666,7 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
         headerRow.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
 
         let titleLabel = makeLabel("ZenRay Color Picker", font: fontSerifTitle, color: .labelColor)
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         headerRow.addArrangedSubview(titleLabel)
         headerRow.addArrangedSubview(NSView()) // spacer
 
@@ -739,11 +758,11 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
 
         // 4. FORMAT ROWS (1-click copy, AnthropicMono for literals, InterVariable for labels, AnthropicSerif for numbers)
         let formats: [(id: String, name: String, code: String, numericBadge: String)] = [
-            ("HEX", "HEX", fgMath.hexString(lowercase: settings.lowercaseHex), "\(fgMath.r255)·\(fgMath.g255)·\(fgMath.b255)"),
-            ("RGB", "RGB", fgMath.rgbString, "\(Int(round(fgMath.relativeLuminance * 100)))% lum"),
+            ("HEX", "HEX", fgMath.hexString(lowercase: settings.lowercaseHex), "\(fgMath.r255)"),
+            ("RGB", "RGB", fgMath.rgbString, "\(Int(round(fgMath.relativeLuminance * 100)))%"),
             ("HSL", "HSL", fgMath.hslString, "\(fgMath.hsl.h)°"),
-            ("OKLCH", "OKLCH", fgMath.oklchString(precision: settings.floatPrecision), String(format: "L %.2f", fgMath.oklch.L)),
-            ("LINEAR", "Linear 3D", fgMath.linearString(precision: settings.floatPrecision), "sRGB→Lin")
+            ("OKLCH", "OKLCH", fgMath.oklchString(precision: settings.floatPrecision), String(format: "%.2f", fgMath.oklch.L)),
+            ("LINEAR", "Linear 3D", fgMath.linearString(precision: settings.floatPrecision), "3D")
         ]
 
         let formatsCard = CardView(frame: NSRect(x: 0, y: 0, width: contentWidth, height: CGFloat(formats.count * 30 + 8)))
@@ -760,19 +779,19 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
             let isDefault = settings.defaultFormat.uppercased() == item.id
             let nameText = isDefault ? "\(item.name) •" : item.name
             let lbl = makeLabel(nameText, font: fontSans, color: isDefault ? .labelColor : .secondaryLabelColor)
-            lbl.frame = NSRect(x: 6, y: 5, width: 68, height: 18)
+            lbl.frame = NSRect(x: 6, y: 5, width: 70, height: 18)
             rowView.addSubview(lbl)
 
             let codeLbl = makeLabel(item.code, font: fontMono, color: .labelColor)
-            codeLbl.frame = NSRect(x: 76, y: 5, width: contentWidth - 178, height: 18)
+            codeLbl.frame = NSRect(x: 78, y: 5, width: contentWidth - 154, height: 18)
             rowView.addSubview(codeLbl)
 
             let numLbl = makeLabel(item.numericBadge, font: fontSerif, color: .tertiaryLabelColor)
             numLbl.alignment = .right
-            numLbl.frame = NSRect(x: contentWidth - 104, y: 5, width: 58, height: 18)
+            numLbl.frame = NSRect(x: contentWidth - 78, y: 5, width: 34, height: 18)
             rowView.addSubview(numLbl)
 
-            let copyBtn = NSButton(frame: NSRect(x: contentWidth - 42, y: 2, width: 26, height: 24))
+            let copyBtn = NSButton(frame: NSRect(x: contentWidth - 40, y: 2, width: 26, height: 24))
             copyBtn.bezelStyle = .recessed
             copyBtn.isBordered = false
             copyBtn.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copier \(item.name)")
@@ -782,7 +801,6 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
             copyBtn.action = #selector(onCopyFormatRow(_:))
             rowView.addSubview(copyBtn)
 
-            // Make entire row clickable via transparent button overlay
             let rowHit = NSButton(frame: NSRect(x: 0, y: 0, width: contentWidth - 12, height: 28))
             rowHit.isTransparent = true
             rowHit.title = ""
@@ -888,7 +906,7 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
             let p3Check = NSButton(checkboxWithTitle: "3. Hex minuscules", target: self, action: #selector(onToggleLowercaseHex(_:)))
             p3Check.font = fontSans
             p3Check.state = settings.lowercaseHex ? .on : .off
-            p3Check.frame = NSRect(x: 155, y: hdaCardHeight - 80, width: contentWidth - 165, height: 20)
+            p3Check.frame = NSRect(x: 160, y: hdaCardHeight - 80, width: contentWidth - 170, height: 20)
             hdaCard.addSubview(p3Check)
 
             // Parm 4 & 8: floatPrecision & pickOnMenuClick
@@ -902,10 +920,10 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
             precSeg.frame = NSRect(x: 118, y: hdaCardHeight - 108, width: 84, height: 22)
             hdaCard.addSubview(precSeg)
 
-            let p8Check = NSButton(checkboxWithTitle: "8. Pipette directe icône", target: self, action: #selector(onTogglePickOnClick(_:)))
+            let p8Check = NSButton(checkboxWithTitle: "8. Pipette icône", target: self, action: #selector(onTogglePickOnClick(_:)))
             p8Check.font = fontSans
             p8Check.state = settings.pickOnMenuClick ? .on : .off
-            p8Check.frame = NSRect(x: 208, y: hdaCardHeight - 106, width: contentWidth - 214, height: 20)
+            p8Check.frame = NSRect(x: 210, y: hdaCardHeight - 106, width: contentWidth - 216, height: 20)
             hdaCard.addSubview(p8Check)
 
             // Parm 5: historyLimit slider
@@ -924,7 +942,7 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
             let p6Lbl = makeLabel("6. Largeur UI", font: fontSans, color: .secondaryLabelColor)
             p6Lbl.frame = NSRect(x: 10, y: hdaCardHeight - 160, width: 95, height: 18)
             hdaCard.addSubview(p6Lbl)
-            let p6Slider = NSSlider(value: settings.windowWidth, minValue: 320, maxValue: 460, target: self, action: #selector(onChangeWindowWidth(_:)))
+            let p6Slider = NSSlider(value: settings.windowWidth, minValue: 360, maxValue: 480, target: self, action: #selector(onChangeWindowWidth(_:)))
             p6Slider.isContinuous = false
             p6Slider.frame = NSRect(x: 110, y: hdaCardHeight - 160, width: contentWidth - 155, height: 18)
             hdaCard.addSubview(p6Slider)
@@ -948,19 +966,19 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
 
             // HDA Footer actions: Copier JSON, Settings.json, Reset, Quitter
             let copyHdaBtn = makeIconButton(symbol: "doc.on.doc", title: "Copier HDA", toolTip: "Copier les valeurs JSON pour le prompt", action: #selector(onCopyHDAJson))
-            copyHdaBtn.frame = NSRect(x: 10, y: 10, width: 104, height: 24)
+            copyHdaBtn.frame = NSRect(x: 10, y: 10, width: 106, height: 24)
             hdaCard.addSubview(copyHdaBtn)
 
             let openJsonBtn = makeIconButton(symbol: "slider.horizontal.3", title: "JSON", toolTip: "Ouvrir Settings.json dans le Finder", action: #selector(onOpenSettingsFile))
-            openJsonBtn.frame = NSRect(x: 118, y: 10, width: 68, height: 24)
+            openJsonBtn.frame = NSRect(x: 124, y: 10, width: 70, height: 24)
             hdaCard.addSubview(openJsonBtn)
 
             let resetBtn = makeIconButton(symbol: "arrow.counterclockwise", title: "Défaut", toolTip: "Réinitialiser les paramètres HDA", action: #selector(onResetHDA))
-            resetBtn.frame = NSRect(x: 190, y: 10, width: 76, height: 24)
+            resetBtn.frame = NSRect(x: 202, y: 10, width: 78, height: 24)
             hdaCard.addSubview(resetBtn)
 
             let quitBtn = makeIconButton(symbol: "xmark", title: "Quitter", toolTip: "Quitter ZenRayColorPicker", action: #selector(onQuitApp))
-            quitBtn.frame = NSRect(x: contentWidth - 78, y: 10, width: 68, height: 24)
+            quitBtn.frame = NSRect(x: contentWidth - 82, y: 10, width: 72, height: 24)
             hdaCard.addSubview(quitBtn)
 
             rootStack.addArrangedSubview(hdaCard)
@@ -968,8 +986,8 @@ final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDeleg
 
         rootStack.layoutSubtreeIfNeeded()
         let fittingH = rootStack.fittingSize.height
-        let targetW = CGFloat(max(320.0, min(460.0, settings.windowWidth)))
-        let targetH = min(680.0, max(340.0, fittingH))
+        let targetW = CGFloat(max(360.0, min(480.0, settings.windowWidth)))
+        let targetH = min(700.0, max(340.0, fittingH))
         rootStack.frame = NSRect(x: 0, y: 0, width: targetW, height: fittingH)
         let oldFrame = window.frame
         let newY = oldFrame.maxY - targetH

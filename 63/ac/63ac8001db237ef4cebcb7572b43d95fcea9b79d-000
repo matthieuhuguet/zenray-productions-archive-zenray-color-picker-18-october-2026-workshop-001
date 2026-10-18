@@ -1,7 +1,7 @@
 {
   "backgroundHex" : "#1f1f1e",
   "bundleId" : "com.zenray.colorpicker",
-  "checkedAt" : "2026-10-18T17:39:29Z",
+  "checkedAt" : "2026-10-18T17:42:37Z",
   "contrastRatio" : 2.59,
   "fontsLoaded" : {
     "AnthropicMono-Regular" : true,
@@ -25,6 +25,6 @@
   },
   "settingsPath" : "\/Users\/zenray\/Library\/Application Support\/ZenRayColorPicker\/Settings.json",
   "wcagLevel" : "Fail",
-  "windowHeight" : 680,
-  "windowWidth" : 368
+  "windowHeight" : 700,
+  "windowWidth" : 404
 }
