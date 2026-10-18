@@ -1,0 +1,159 @@
+// 18 October 2026: HDA build, icon generation, font bundling, and installation script for ZenRayColorPicker.app.
+import { mkdir, writeFile, copyFile, readFile, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url))
+const rootDir = path.dirname(scriptDir)
+const sourcesDir = path.join(rootDir, 'Sources')
+const buildDir = path.join(rootDir, 'Build')
+
+const destinations = [
+  '/Applications/ZenRayColorPicker.app',
+  path.join(process.env.HOME, 'Applications/ZenRayColorPicker.app'),
+  path.join(buildDir, 'ZenRayColorPicker.app')
+]
+
+await mkdir(buildDir, { recursive: true })
+
+// 18 October 2026: Generate a clean native macOS .icns icon via Swift AppKit.
+const iconGenSwift = `
+import AppKit
+let size = NSSize(width: 512, height: 512)
+let img = NSImage(size: size)
+img.lockFocus()
+let rect = NSRect(origin: .zero, size: size).insetBy(dx: 28, dy: 28)
+let bg = NSBezierPath(roundedRect: rect, xRadius: 108, yRadius: 108)
+NSColor(srgbRed: 0.12, green: 0.12, blue: 0.12, alpha: 1.0).setFill()
+bg.fill()
+let swatchRect = NSRect(x: 92, y: 92, width: 328, height: 328)
+let swatchPath = NSBezierPath(roundedRect: swatchRect, xRadius: 72, yRadius: 72)
+NSColor(srgbRed: 0.714, green: 0.153, blue: 0.129, alpha: 1.0).setFill()
+swatchPath.fill()
+if let sym = NSImage(systemSymbolName: "eyedropper.halffull", accessibilityDescription: nil) {
+    let cfg = NSImage.SymbolConfiguration(pointSize: 168, weight: .regular)
+    if let configured = sym.withSymbolConfiguration(cfg) {
+        let tinted = NSImage(size: configured.size)
+        tinted.lockFocus()
+        configured.draw(in: NSRect(origin: .zero, size: configured.size))
+        NSColor.white.set()
+        NSRect(origin: .zero, size: configured.size).fill(using: .sourceAtop)
+        tinted.unlockFocus()
+        let sx = (512 - configured.size.width) / 2.0
+        let sy = (512 - configured.size.height) / 2.0
+        tinted.draw(in: NSRect(x: sx, y: sy, width: configured.size.width, height: configured.size.height))
+    }
+}
+img.unlockFocus()
+if let tiff = img.tiffRepresentation,
+   let rep = NSBitmapImageRep(data: tiff),
+   let png = rep.representation(using: .png, properties: [:]) {
+    try! png.write(to: URL(fileURLWithPath: CommandLine.arguments[1]))
+}
+`
+
+const iconPngPath = path.join(buildDir, 'AppIcon-512.png')
+const iconsetDir = path.join(buildDir, 'AppIcon.iconset')
+const icnsPath = path.join(buildDir, 'AppIcon.icns')
+await mkdir(iconsetDir, { recursive: true })
+execFileSync('swift', ['-e', iconGenSwift, iconPngPath], { stdio: 'inherit' })
+for (const [name, px] of [
+  ['icon_16x16.png', 16], ['icon_16x16@2x.png', 32],
+  ['icon_32x32.png', 32], ['icon_32x32@2x.png', 64],
+  ['icon_128x128.png', 128], ['icon_128x128@2x.png', 256],
+  ['icon_256x256.png', 256], ['icon_256x256@2x.png', 512],
+  ['icon_512x512.png', 512]
+]) {
+  execFileSync('sips', ['-z', String(px), String(px), iconPngPath, '--out', path.join(iconsetDir, name)], { stdio: 'ignore' })
+}
+execFileSync('iconutil', ['-c', 'icns', iconsetDir, '-o', icnsPath], { stdio: 'inherit' })
+await rm(iconsetDir, { recursive: true, force: true })
+
+// 18 October 2026: Compile optimized native arm64 binary with AppKit, Carbon, CoreText.
+const compiledBin = path.join(buildDir, 'ZenRayColorPicker-bin')
+execFileSync('xcrun', [
+  'swiftc', '-O',
+  path.join(sourcesDir, 'main.swift'),
+  '-o', compiledBin,
+  '-framework', 'AppKit',
+  '-framework', 'Carbon',
+  '-framework', 'CoreText'
+], { stdio: 'inherit' })
+
+const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>ZenRayColorPicker</string>
+  <key>CFBundleDisplayName</key><string>ZenRay Color Picker</string>
+  <key>CFBundleExecutable</key><string>ZenRayColorPicker</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIdentifier</key><string>com.zenray.colorpicker</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.0.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSUIElement</key><true/>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+`
+
+const fontsToBundle = ['InterVariable.ttf', 'AnthropicSerif-Regular.ttf', 'AnthropicMono-Regular.ttf']
+
+for (const appDest of destinations) {
+  const contents = path.join(appDest, 'Contents')
+  const macosDir = path.join(contents, 'MacOS')
+  const resDir = path.join(contents, 'Resources')
+  const fontsDir = path.join(resDir, 'Fonts')
+  await mkdir(macosDir, { recursive: true })
+  await mkdir(fontsDir, { recursive: true })
+
+  await copyFile(compiledBin, path.join(macosDir, 'ZenRayColorPicker'))
+  execFileSync('chmod', ['+x', path.join(macosDir, 'ZenRayColorPicker')])
+  await copyFile(path.join(sourcesDir, 'Settings.json'), path.join(resDir, 'Settings.json'))
+  if (existsSync(path.join(sourcesDir, 'pika-migrated-colors.json'))) {
+    await copyFile(path.join(sourcesDir, 'pika-migrated-colors.json'), path.join(resDir, 'MigratedColors.json'))
+  }
+  await copyFile(icnsPath, path.join(resDir, 'AppIcon.icns'))
+
+  for (const fontFile of fontsToBundle) {
+    const srcFont = path.join(process.env.HOME, 'Library/Fonts', fontFile)
+    if (existsSync(srcFont)) {
+      await copyFile(srcFont, path.join(fontsDir, fontFile))
+    }
+  }
+
+  await writeFile(path.join(contents, 'Info.plist'), infoPlist)
+  execFileSync('codesign', ['--force', '--deep', '--sign', '-', appDest], { stdio: 'inherit' })
+}
+
+// 18 October 2026: Configure LaunchAgent so ZenRayColorPicker stays active in the menu bar across logins.
+const launchAgentLabel = 'com.zenray.colorpicker'
+const launchAgentPath = path.join(process.env.HOME, 'Library/LaunchAgents', `${launchAgentLabel}.plist`)
+await mkdir(path.dirname(launchAgentPath), { recursive: true })
+const launchAgentPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${launchAgentLabel}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/ZenRayColorPicker.app/Contents/MacOS/ZenRayColorPicker</string>
+    <string>--background</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+</dict>
+</plist>
+`
+await writeFile(launchAgentPath, launchAgentPlist, { mode: 0o600 })
+execFileSync('plutil', ['-lint', launchAgentPath], { stdio: 'inherit' })
+
+console.log(JSON.stringify({
+  installed: destinations,
+  launchAgent: launchAgentPath,
+  settings: JSON.parse(await readFile(path.join(sourcesDir, 'Settings.json'), 'utf8'))
+}, null, 2))

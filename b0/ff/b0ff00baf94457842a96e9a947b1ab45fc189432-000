@@ -1,0 +1,30 @@
+{
+  "backgroundHex" : "#1f1f1e",
+  "bundleId" : "com.zenray.colorpicker",
+  "checkedAt" : "2026-10-18T17:39:28Z",
+  "contrastRatio" : 2.59,
+  "fontsLoaded" : {
+    "AnthropicMono-Regular" : true,
+    "AnthropicSerif-Regular" : true,
+    "InterVariable" : true
+  },
+  "foregroundHex" : "#b62721",
+  "formats" : {
+    "HEX" : "#b62721",
+    "HSL" : "hsl(2, 69%, 42%)",
+    "LINEAR" : "{0.468, 0.020, 0.015}",
+    "OKLCH" : "oklch(0.508 0.180 28.1)",
+    "RGB" : "rgb(182, 39, 33)"
+  },
+  "hdaParameterCount" : 8,
+  "historyCount" : 20,
+  "resolvedFonts" : {
+    "mono" : "AnthropicMono-Regular",
+    "sans" : "InterVariable",
+    "serif" : "AnthropicSerif-Regular"
+  },
+  "settingsPath" : "\/Users\/zenray\/Library\/Application Support\/ZenRayColorPicker\/Settings.json",
+  "wcagLevel" : "Fail",
+  "windowHeight" : 433,
+  "windowWidth" : 368
+}

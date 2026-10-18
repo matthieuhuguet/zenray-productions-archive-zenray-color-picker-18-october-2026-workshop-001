@@ -1,0 +1,16 @@
+{
+  "defaultFormat": "HEX",
+  "autoCopyOnPick": true,
+  "lowercaseHex": true,
+  "floatPrecision": 3,
+  "historyLimit": 20,
+  "windowWidth": 368,
+  "fontSize": 13,
+  "pickOnMenuClick": false,
+  "alwaysOnTop": true,
+  "fontSans": "InterVariable",
+  "fontSerif": "AnthropicSerif-Regular",
+  "fontMono": "AnthropicMono-Regular",
+  "initialForegroundHex": "#b62721",
+  "initialBackgroundHex": "#1f1f1e"
+}

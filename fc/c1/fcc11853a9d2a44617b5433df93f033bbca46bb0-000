@@ -1,0 +1,1146 @@
+import AppKit
+import Carbon
+import CoreText
+
+// 18 October 2026: HDA parametric configuration for ZenRayColorPicker (max 8 interactive parameters exposed in UI).
+struct HDASettings: Codable, Equatable {
+    var defaultFormat: String      // 1. HEX, RGB, HSL, OKLCH, LINEAR (18 October 2026)
+    var autoCopyOnPick: Bool       // 2. Copy automatically after eyedropper pick (18 October 2026)
+    var lowercaseHex: Bool         // 3. Format hex in lowercase (#b62721 vs #B62721) (18 October 2026)
+    var floatPrecision: Int        // 4. Decimal places for Linear 3D & OKLCH (2, 3, 4) (18 October 2026)
+    var historyLimit: Int          // 5. Number of history swatches kept (10 to 40) (18 October 2026)
+    var windowWidth: Double        // 6. Panel width in points (320 to 460) (18 October 2026)
+    var fontSize: Double           // 7. Base UI scale --zr-ui-base in points (11 to 16) (18 October 2026)
+    var pickOnMenuClick: Bool      // 8. Left-click menu bar triggers eyedropper immediately (18 October 2026)
+    var alwaysOnTop: Bool
+    var fontSans: String
+    var fontSerif: String
+    var fontMono: String
+    var initialForegroundHex: String
+    var initialBackgroundHex: String
+}
+
+// 18 October 2026: Persistent state storing foreground, background, and picked color history.
+struct AppState: Codable {
+    var foregroundHex: String
+    var backgroundHex: String
+    var history: [String]
+}
+
+// 18 October 2026: Verification payload written when launched with --verify-proof.
+struct ProofPayload: Codable {
+    let checkedAt: String
+    let bundleId: String
+    let windowWidth: Double
+    let windowHeight: Double
+    let fontsLoaded: [String: Bool]
+    let resolvedFonts: [String: String]
+    let foregroundHex: String
+    let backgroundHex: String
+    let formats: [String: String]
+    let contrastRatio: Double
+    let wcagLevel: String
+    let historyCount: Int
+    let hdaParameterCount: Int
+    let settingsPath: String
+}
+
+// 18 October 2026: Exact color math for sRGB, Linear sRGB (Houdini/Unreal), HSL, OKLCH, and WCAG 2.1 contrast.
+struct ColorMath {
+    let r: Double // 0...1 sRGB
+    let g: Double // 0...1 sRGB
+    let b: Double // 0...1 sRGB
+
+    init(nsColor: NSColor) {
+        let converted = nsColor.usingColorSpace(.sRGB) ?? nsColor
+        self.r = max(0.0, min(1.0, Double(converted.redComponent)))
+        self.g = max(0.0, min(1.0, Double(converted.greenComponent)))
+        self.b = max(0.0, min(1.0, Double(converted.blueComponent)))
+    }
+
+    init?(hex: String) {
+        var cleaned = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("#") { cleaned.removeFirst() }
+        if cleaned.count == 3 {
+            cleaned = cleaned.map { "\($0)\($0)" }.joined()
+        }
+        guard cleaned.count == 6, let val = UInt32(cleaned, radix: 16) else { return nil }
+        self.r = Double((val >> 16) & 0xFF) / 255.0
+        self.g = Double((val >> 8) & 0xFF) / 255.0
+        self.b = Double(val & 0xFF) / 255.0
+    }
+
+    var nsColor: NSColor {
+        NSColor(srgbRed: CGFloat(r), green: CGFloat(g), blue: CGFloat(b), alpha: 1.0)
+    }
+
+    var r255: Int { Int(round(r * 255.0)) }
+    var g255: Int { Int(round(g * 255.0)) }
+    var b255: Int { Int(round(b * 255.0)) }
+
+    func hexString(lowercase: Bool) -> String {
+        let raw = String(format: "#%02X%02X%02X", r255, g255, b255)
+        return lowercase ? raw.lowercased() : raw
+    }
+
+    var rgbString: String {
+        "rgb(\(r255), \(g255), \(b255))"
+    }
+
+    // 18 October 2026: IEC 61966-2-1 exact sRGB to Linear transfer for Houdini Copernicus / Karma / Unreal.
+    static func toLinear(_ c: Double) -> Double {
+        return c <= 0.04045 ? (c / 12.92) : pow((c + 0.055) / 1.055, 2.4)
+    }
+
+    var linearRGB: (Double, Double, Double) {
+        (Self.toLinear(r), Self.toLinear(g), Self.toLinear(b))
+    }
+
+    func linearString(precision: Int) -> String {
+        let p = max(2, min(4, precision))
+        let (lr, lg, lb) = linearRGB
+        let fmt = "%.\(p)f"
+        return String(format: "{\(fmt), \(fmt), \(fmt)}", lr, lg, lb)
+    }
+
+    var hsl: (h: Int, s: Int, l: Int) {
+        let maxC = max(r, g, b)
+        let minC = min(r, g, b)
+        let l = (maxC + minC) / 2.0
+        if maxC == minC {
+            return (0, 0, Int(round(l * 100.0)))
+        }
+        let d = maxC - minC
+        let s = l > 0.5 ? d / (2.0 - maxC - minC) : d / (maxC + minC)
+        var h: Double = 0
+        if maxC == r {
+            h = (g - b) / d + (g < b ? 6.0 : 0.0)
+        } else if maxC == g {
+            h = (b - r) / d + 2.0
+        } else {
+            h = (r - g) / d + 4.0
+        }
+        h /= 6.0
+        return (Int(round(h * 360.0)) % 360, Int(round(s * 100.0)), Int(round(l * 100.0)))
+    }
+
+    var hslString: String {
+        let (h, s, l) = hsl
+        return "hsl(\(h), \(s)%, \(l)%)"
+    }
+
+    // 18 October 2026: Björn Ottosson OKLab / OKLCH conversion from linear sRGB.
+    var oklch: (L: Double, C: Double, H: Double) {
+        let (lr, lg, lb) = linearRGB
+        let l = 0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb
+        let m = 0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb
+        let s = 0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb
+        let l_ = cbrt(l)
+        let m_ = cbrt(m)
+        let s_ = cbrt(s)
+        let L = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_
+        let a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_
+        let bVal = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
+        let C = sqrt(a * a + bVal * bVal)
+        var H = atan2(bVal, a) * 180.0 / .pi
+        if H < 0 { H += 360.0 }
+        return (max(0.0, min(1.0, L)), max(0.0, C), C < 0.0001 ? 0.0 : H)
+    }
+
+    func oklchString(precision: Int) -> String {
+        let p = max(2, min(4, precision))
+        let (L, C, H) = oklch
+        let fmt = "%.\(p)f"
+        return String(format: "oklch(\(fmt) \(fmt) %.1f)", L, C, H)
+    }
+
+    var relativeLuminance: Double {
+        let (lr, lg, lb) = linearRGB
+        return 0.2126 * lr + 0.7152 * lg + 0.0722 * lb
+    }
+
+    func contrastRatio(with other: ColorMath) -> Double {
+        let l1 = max(self.relativeLuminance, other.relativeLuminance)
+        let l2 = min(self.relativeLuminance, other.relativeLuminance)
+        return (l1 + 0.05) / (l2 + 0.05)
+    }
+
+    var idealTextColor: NSColor {
+        relativeLuminance > 0.36 ? NSColor(calibratedWhite: 0.08, alpha: 0.92) : NSColor(calibratedWhite: 0.98, alpha: 0.95)
+    }
+}
+
+// 18 October 2026: Adaptive rounded card view that updates automatically between light and dark macOS themes.
+final class CardView: NSView {
+    var fillColor: NSColor = NSColor.controlBackgroundColor { didSet { needsDisplay = true } }
+    var strokeColor: NSColor = NSColor.separatorColor { didSet { needsDisplay = true } }
+    var radius: CGFloat = 10 { didSet { needsDisplay = true } }
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
+        fillColor.setFill()
+        path.fill()
+        strokeColor.setStroke()
+        path.lineWidth = 1.0
+        path.stroke()
+    }
+}
+
+// 18 October 2026: Interactive color swatch button supporting left-click (eyedropper/select) and right-click (secondary action).
+final class SwatchView: NSView {
+    var color: ColorMath = ColorMath(hex: "#b62721")! { didSet { needsDisplay = true } }
+    var titleText: String = ""
+    var hexText: String = ""
+    var sansFont: NSFont = .systemFont(ofSize: 11)
+    var monoFont: NSFont = .monospacedSystemFont(ofSize: 12, weight: .regular)
+    var radius: CGFloat = 10
+    var onLeftClick: (() -> Void)?
+    var onRightClick: (() -> Void)?
+
+    override func draw(_ dirtyRect: NSRect) {
+        let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        color.nsColor.setFill()
+        path.fill()
+        NSColor.separatorColor.withAlphaComponent(0.35).setStroke()
+        path.lineWidth = 1.0
+        path.stroke()
+
+        let textColor = color.idealTextColor
+        if !titleText.isEmpty {
+            let titleAttrs: [NSAttributedString.Key: Any] = [
+                .font: sansFont,
+                .foregroundColor: textColor.withAlphaComponent(0.78)
+            ]
+            NSString(string: titleText).draw(at: NSPoint(x: 10, y: bounds.height - 22), withAttributes: titleAttrs)
+        }
+        if !hexText.isEmpty {
+            let hexAttrs: [NSAttributedString.Key: Any] = [
+                .font: monoFont,
+                .foregroundColor: textColor
+            ]
+            NSString(string: hexText).draw(at: NSPoint(x: 10, y: 8), withAttributes: hexAttrs)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.option) || event.modifierFlags.contains(.control) {
+            onRightClick?()
+        } else {
+            onLeftClick?()
+        }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        onRightClick?()
+    }
+}
+
+// 18 October 2026: Carbon hotkey callback forwarding global shortcuts to the main app delegate.
+private var sharedPickerApp: ZenRayColorPickerApp?
+
+private func carbonHotKeyHandler(nextHandler: EventHandlerCallRef?, event: EventRef?, userData: UnsafeMutableRawPointer?) -> OSStatus {
+    guard let event = event else { return OSStatus(eventNotHandledErr) }
+    var hotKeyID = EventHotKeyID()
+    let status = GetEventParameter(
+        event,
+        EventParamName(kEventParamDirectObject),
+        EventParamType(typeEventHotKeyID),
+        nil,
+        MemoryLayout<EventHotKeyID>.size,
+        nil,
+        &hotKeyID
+    )
+    if status == noErr {
+        DispatchQueue.main.async {
+            if hotKeyID.id == 1 {
+                sharedPickerApp?.pickForegroundGlobal()
+            } else if hotKeyID.id == 2 {
+                sharedPickerApp?.toggleWindow()
+            }
+        }
+    }
+    return noErr
+}
+
+final class ZenRayColorPickerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    var settings: HDASettings!
+    var defaultSettings: HDASettings!
+    var state: AppState!
+    var statusItem: NSStatusItem!
+    var window: NSPanel!
+    var rootStack: NSStackView!
+    var scrollView: NSScrollView!
+
+    var fontSans: NSFont!
+    var fontSerif: NSFont!
+    var fontSerifTitle: NSFont!
+    var fontMono: NSFont!
+    var fontsLoaded: [String: Bool] = [:]
+
+    var showHDAPanel = false
+    var copiedBannerText: String?
+    var bannerTimer: Timer?
+    var hotKeyRefPick: EventHotKeyRef?
+    var hotKeyRefToggle: EventHotKeyRef?
+
+    let appSupportDir: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("ZenRayColorPicker", isDirectory: true)
+    }()
+
+    var userSettingsURL: URL { appSupportDir.appendingPathComponent("Settings.json") }
+    var stateURL: URL { appSupportDir.appendingPathComponent("State.json") }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        sharedPickerApp = self
+        try? FileManager.default.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
+
+        registerBundledFonts()
+        loadSettingsAndState()
+        rebuildFonts()
+        setupStatusItem()
+        setupWindow()
+        registerGlobalHotKeys()
+        rebuildUI()
+
+        if CommandLine.arguments.contains("--show-hda") {
+            showHDAPanel = true
+            rebuildUI()
+        }
+
+        // 18 October 2026: Open window on launch when opened interactively (unless --background is passed by LaunchAgent).
+        if !CommandLine.arguments.contains("--background") || CommandLine.arguments.contains("--show") || ProcessInfo.processInfo.environment["ZENRAY_PICKER_PROOF"] != nil {
+            showWindowBelowStatusItem()
+        }
+
+        if let proofPath = ProcessInfo.processInfo.environment["ZENRAY_PICKER_PROOF"] {
+            let screenshotPath = ProcessInfo.processInfo.environment["ZENRAY_PICKER_SCREENSHOT"]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                self.writeVerificationProof(to: proofPath, screenshotPath: screenshotPath)
+            }
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showWindowBelowStatusItem()
+        return true
+    }
+
+    // 18 October 2026: Register bundled TTF fonts from Contents/Resources/Fonts so fallback is never silent.
+    func registerBundledFonts() {
+        let fontsDir = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Fonts")
+        guard let items = try? FileManager.default.contentsOfDirectory(at: fontsDir, includingPropertiesForKeys: nil) else { return }
+        for url in items where url.pathExtension.lowercased() == "ttf" || url.pathExtension.lowercased() == "otf" {
+            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        }
+    }
+
+    func loadSettingsAndState() {
+        let bundledSettingsURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Settings.json")
+        if let data = try? Data(contentsOf: bundledSettingsURL),
+           let decoded = try? JSONDecoder().decode(HDASettings.self, from: data) {
+            defaultSettings = decoded
+        } else {
+            defaultSettings = HDASettings(
+                defaultFormat: "HEX",
+                autoCopyOnPick: true,
+                lowercaseHex: true,
+                floatPrecision: 3,
+                historyLimit: 20,
+                windowWidth: 368,
+                fontSize: 13,
+                pickOnMenuClick: false,
+                alwaysOnTop: true,
+                fontSans: "InterVariable",
+                fontSerif: "AnthropicSerif-Regular",
+                fontMono: "AnthropicMono-Regular",
+                initialForegroundHex: "#b62721",
+                initialBackgroundHex: "#1f1f1e"
+            )
+        }
+
+        if let userData = try? Data(contentsOf: userSettingsURL),
+           let userDecoded = try? JSONDecoder().decode(HDASettings.self, from: userData) {
+            settings = userDecoded
+        } else {
+            settings = defaultSettings
+            saveSettings()
+        }
+
+        if let stateData = try? Data(contentsOf: stateURL),
+           let decodedState = try? JSONDecoder().decode(AppState.self, from: stateData) {
+            state = decodedState
+        } else {
+            // 18 October 2026: Seed with migrated Pika colors if bundled in Resources/MigratedColors.json.
+            let migratedURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/MigratedColors.json")
+            var initialHistory: [String] = ["#b62721", "#a78c5c", "#a49a70", "#465637", "#81e1fb", "#ec7972", "#76a2d0", "#99f8d3", "#c5c8cd", "#f19e46"]
+            if let mData = try? Data(contentsOf: migratedURL),
+               let mColors = try? JSONDecoder().decode([String].self, from: mData), !mColors.isEmpty {
+                initialHistory = mColors
+            }
+            state = AppState(
+                foregroundHex: initialHistory.first ?? settings.initialForegroundHex,
+                backgroundHex: settings.initialBackgroundHex,
+                history: Array(initialHistory.prefix(settings.historyLimit))
+            )
+            saveState()
+        }
+    }
+
+    func saveSettings() {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(settings) {
+            try? data.write(to: userSettingsURL, options: .atomic)
+        }
+    }
+
+    func saveState() {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted]
+        if let data = try? encoder.encode(state) {
+            try? data.write(to: stateURL, options: .atomic)
+        }
+    }
+
+    // 18 October 2026: Build the ZenRay typographic trio (InterVariable 400, AnthropicSerif-Regular 400, AnthropicMono-Regular 400).
+    func rebuildFonts() {
+        let sz = CGFloat(max(11.0, min(16.0, settings.fontSize)))
+        let rawSans = NSFont(name: settings.fontSans, size: sz)
+        let rawSerif = NSFont(name: settings.fontSerif, size: sz)
+        let rawMono = NSFont(name: settings.fontMono, size: sz)
+
+        fontsLoaded = [
+            settings.fontSans: rawSans != nil,
+            settings.fontSerif: rawSerif != nil,
+            settings.fontMono: rawMono != nil
+        ]
+
+        fontSans = rawSans ?? NSFont.systemFont(ofSize: sz, weight: .regular)
+        fontSerif = rawSerif ?? NSFont.systemFont(ofSize: sz, weight: .regular)
+        fontSerifTitle = NSFont(name: settings.fontSerif, size: sz + 3.0) ?? fontSerif
+        fontMono = rawMono ?? NSFont.monospacedSystemFont(ofSize: sz, weight: .regular)
+    }
+
+    func setupStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem.autosaveName = "com.zenray.colorpicker.status"
+        if let button = statusItem.button {
+            if let icon = NSImage(systemSymbolName: "eyedropper.halffull", accessibilityDescription: "ZenRay Color Picker") {
+                icon.size = NSSize(width: 15, height: 15)
+                icon.isTemplate = true
+                button.image = icon
+            } else {
+                button.title = "Color"
+            }
+            button.toolTip = "ZenRay Color Picker (Clic: panneau · Clic droit ou ⌘⇧C: pipette directe)"
+            button.target = self
+            button.action = #selector(statusItemClicked(_:))
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
+    }
+
+    func setupWindow() {
+        let w = CGFloat(max(320.0, min(460.0, settings.windowWidth)))
+        window = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: w, height: 460),
+            styleMask: [.titled, .closable, .fullSizeContentView, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isFloatingPanel = settings.alwaysOnTop
+        window.level = settings.alwaysOnTop ? .floating : .normal
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.isMovableByWindowBackground = true
+        window.hasShadow = true
+        window.delegate = self
+
+        // 18 October 2026: Liquid Glass / native macOS vibrancy material.
+        let visualEffect = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: w, height: 460))
+        visualEffect.material = .popover
+        visualEffect.blendingMode = .behindWindow
+        visualEffect.state = .active
+        visualEffect.autoresizingMask = [.width, .height]
+
+        scrollView = NSScrollView(frame: visualEffect.bounds)
+        scrollView.autoresizingMask = [.width, .height]
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.verticalScroller?.controlSize = .small
+
+        rootStack = NSStackView()
+        rootStack.orientation = .vertical
+        rootStack.alignment = .leading
+        rootStack.distribution = .fill
+        rootStack.spacing = 10
+        rootStack.edgeInsets = NSEdgeInsets(top: 28, left: 14, bottom: 14, right: 14)
+
+        scrollView.documentView = rootStack
+        visualEffect.addSubview(scrollView)
+        window.contentView = visualEffect
+    }
+
+    func registerGlobalHotKeys() {
+        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetApplicationEventTarget(), carbonHotKeyHandler, 1, &eventType, nil, nil)
+
+        // 18 October 2026: HotKey 1 = Cmd + Shift + C (keyCode 8 = 'C') -> direct eyedropper
+        let hotKeyID1 = EventHotKeyID(signature: OSType(0x5A524350), id: 1) // 'ZRCP'
+        RegisterEventHotKey(UInt32(kVK_ANSI_C), UInt32(cmdKey | shiftKey), hotKeyID1, GetApplicationEventTarget(), 0, &hotKeyRefPick)
+
+        // 18 October 2026: HotKey 2 = Option + Cmd + C (keyCode 8 = 'C') -> toggle window
+        let hotKeyID2 = EventHotKeyID(signature: OSType(0x5A524350), id: 2)
+        RegisterEventHotKey(UInt32(kVK_ANSI_C), UInt32(cmdKey | optionKey), hotKeyID2, GetApplicationEventTarget(), 0, &hotKeyRefToggle)
+    }
+
+    @objc func statusItemClicked(_ sender: NSStatusBarButton) {
+        guard let event = NSApp.currentEvent else {
+            toggleWindow()
+            return
+        }
+        if event.type == .rightMouseUp || event.modifierFlags.contains(.option) || settings.pickOnMenuClick {
+            pickColor(isForeground: true)
+        } else {
+            toggleWindow()
+        }
+    }
+
+    func toggleWindow() {
+        if window.isVisible {
+            window.orderOut(nil)
+        } else {
+            showWindowBelowStatusItem()
+        }
+    }
+
+    func showWindowBelowStatusItem() {
+        let w = CGFloat(max(320.0, min(460.0, settings.windowWidth)))
+        let h = window.frame.height
+        if let button = statusItem.button, let btnWin = button.window {
+            let btnFrame = btnWin.frame
+            let x = round(btnFrame.midX - w / 2.0)
+            let y = round(btnFrame.minY - h - 6.0)
+            window.setFrame(NSRect(x: max(12, x), y: max(40, y), width: w, height: h), display: true)
+        } else if let screen = NSScreen.main {
+            let vf = screen.visibleFrame
+            window.setFrame(NSRect(x: vf.maxX - w - 20, y: vf.maxY - h - 12, width: w, height: h), display: true)
+        }
+        window.level = settings.alwaysOnTop ? .floating : .normal
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func pickForegroundGlobal() {
+        pickColor(isForeground: true)
+    }
+
+    // 18 October 2026: Launch Apple's native Retina pixel loupe (NSColorSampler) without blocking the screen.
+    func pickColor(isForeground: Bool) {
+        let wasVisible = window.isVisible
+        if wasVisible {
+            window.orderOut(nil)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            let sampler = NSColorSampler()
+            sampler.show { [weak self] selectedColor in
+                guard let self = self else { return }
+                if let picked = selectedColor {
+                    let math = ColorMath(nsColor: picked)
+                    let hex = math.hexString(lowercase: self.settings.lowercaseHex)
+                    if isForeground {
+                        self.setForeground(hex: hex, copyIfEnabled: self.settings.autoCopyOnPick)
+                    } else {
+                        self.state.backgroundHex = hex
+                        self.saveState()
+                        self.rebuildUI()
+                    }
+                }
+                self.showWindowBelowStatusItem()
+            }
+        }
+    }
+
+    func setForeground(hex: String, copyIfEnabled: Bool) {
+        guard let math = ColorMath(hex: hex) else { return }
+        let normalized = math.hexString(lowercase: settings.lowercaseHex)
+        state.foregroundHex = normalized
+        state.history.removeAll { $0.lowercased() == normalized.lowercased() }
+        state.history.insert(normalized, at: 0)
+        if state.history.count > settings.historyLimit {
+            state.history = Array(state.history.prefix(settings.historyLimit))
+        }
+        saveState()
+        if copyIfEnabled {
+            let formatted = formattedValue(for: settings.defaultFormat, color: math)
+            copyToPasteboard(formatted, label: settings.defaultFormat)
+        } else {
+            rebuildUI()
+        }
+    }
+
+    func formattedValue(for format: String, color: ColorMath) -> String {
+        switch format.uppercased() {
+        case "RGB": return color.rgbString
+        case "HSL": return color.hslString
+        case "OKLCH": return color.oklchString(precision: settings.floatPrecision)
+        case "LINEAR": return color.linearString(precision: settings.floatPrecision)
+        default: return color.hexString(lowercase: settings.lowercaseHex)
+        }
+    }
+
+    func copyToPasteboard(_ value: String, label: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+        copiedBannerText = "Copié (\(label)) : \(value)"
+        bannerTimer?.invalidate()
+        bannerTimer = Timer.scheduledTimer(withTimeInterval: 2.2, repeats: false) { [weak self] _ in
+            self?.copiedBannerText = nil
+            self?.rebuildUI()
+        }
+        rebuildUI()
+    }
+
+    // 18 October 2026: Helper to build labels strictly respecting the ZenRay typographic trio.
+    func makeLabel(_ text: String, font: NSFont, color: NSColor = .labelColor) -> NSTextField {
+        let tf = NSTextField(labelWithString: text)
+        tf.font = font
+        tf.textColor = color
+        tf.lineBreakMode = .byTruncatingTail
+        return tf
+    }
+
+    func makeIconButton(symbol: String, title: String? = nil, toolTip: String, action: Selector) -> NSButton {
+        let btn = NSButton()
+        btn.bezelStyle = .recessed
+        btn.isBordered = true
+        btn.font = fontSans
+        btn.toolTip = toolTip
+        btn.target = self
+        btn.action = action
+        if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: toolTip) {
+            btn.image = img
+            btn.imagePosition = title == nil ? .imageOnly : .imageLeading
+        }
+        btn.title = title ?? ""
+        return btn
+    }
+
+    func rebuildUI() {
+        rebuildFonts()
+        let contentWidth = CGFloat(max(320.0, min(460.0, settings.windowWidth))) - 28.0
+        for sub in rootStack.arrangedSubviews {
+            rootStack.removeArrangedSubview(sub)
+            sub.removeFromSuperview()
+        }
+
+        let fgMath = ColorMath(hex: state.foregroundHex) ?? ColorMath(hex: "#b62721")!
+        let bgMath = ColorMath(hex: state.backgroundHex) ?? ColorMath(hex: "#1f1f1e")!
+
+        // 1. HEADER ROW
+        let headerRow = NSStackView()
+        headerRow.orientation = .horizontal
+        headerRow.alignment = .centerY
+        headerRow.distribution = .fill
+        headerRow.spacing = 6
+        headerRow.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+
+        let titleLabel = makeLabel("ZenRay Color Picker", font: fontSerifTitle, color: .labelColor)
+        headerRow.addArrangedSubview(titleLabel)
+        headerRow.addArrangedSubview(NSView()) // spacer
+
+        let pickBtn = makeIconButton(symbol: "eyedropper.halffull", title: "Pipette", toolTip: "Pipette écran (⌘⇧C)", action: #selector(onPickForeground))
+        headerRow.addArrangedSubview(pickBtn)
+
+        let pinSymbol = settings.alwaysOnTop ? "pin.fill" : "pin"
+        let pinBtn = makeIconButton(symbol: pinSymbol, title: nil, toolTip: "Garder au premier plan", action: #selector(onTogglePin))
+        headerRow.addArrangedSubview(pinBtn)
+
+        let hdaBtn = makeIconButton(symbol: "slider.horizontal.3", title: "HDA", toolTip: "Afficher / masquer les 8 paramètres HDA", action: #selector(onToggleHDA))
+        headerRow.addArrangedSubview(hdaBtn)
+
+        rootStack.addArrangedSubview(headerRow)
+
+        // 2. COPIED STATUS BANNER (if active)
+        if let banner = copiedBannerText {
+            let bannerCard = CardView(frame: NSRect(x: 0, y: 0, width: contentWidth, height: 26))
+            bannerCard.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.14)
+            bannerCard.radius = 7
+            bannerCard.translatesAutoresizingMaskIntoConstraints = false
+            bannerCard.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+            bannerCard.heightAnchor.constraint(equalToConstant: 26).isActive = true
+
+            let bannerLbl = makeLabel(banner, font: fontMono, color: .labelColor)
+            bannerLbl.frame = NSRect(x: 10, y: 4, width: contentWidth - 20, height: 18)
+            bannerCard.addSubview(bannerLbl)
+            rootStack.addArrangedSubview(bannerCard)
+        }
+
+        // 3. FOREGROUND / BACKGROUND SWATCHES + WCAG CONTRAST CARD
+        let swatchCard = CardView(frame: NSRect(x: 0, y: 0, width: contentWidth, height: 104))
+        swatchCard.fillColor = NSColor.controlBackgroundColor.withAlphaComponent(0.65)
+        swatchCard.radius = 10
+        swatchCard.translatesAutoresizingMaskIntoConstraints = false
+        swatchCard.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+        swatchCard.heightAnchor.constraint(equalToConstant: 104).isActive = true
+
+        let swatchW = floor((contentWidth - 52.0) / 2.0)
+        let fgSwatch = SwatchView(frame: NSRect(x: 8, y: 34, width: swatchW, height: 62))
+        fgSwatch.color = fgMath
+        fgSwatch.titleText = "Premier plan · Pipette"
+        fgSwatch.hexText = fgMath.hexString(lowercase: settings.lowercaseHex)
+        fgSwatch.sansFont = NSFont(name: settings.fontSans, size: 11) ?? fontSans
+        fgSwatch.monoFont = fontMono
+        fgSwatch.onLeftClick = { [weak self] in self?.pickColor(isForeground: true) }
+        fgSwatch.onRightClick = { [weak self] in
+            guard let self = self else { return }
+            self.copyToPasteboard(fgMath.hexString(lowercase: self.settings.lowercaseHex), label: "HEX")
+        }
+        swatchCard.addSubview(fgSwatch)
+
+        let swapBtn = makeIconButton(symbol: "arrow.left.arrow.right", title: nil, toolTip: "Inverser Premier plan et Arrière-plan", action: #selector(onSwapColors))
+        swapBtn.frame = NSRect(x: 8 + swatchW + 4, y: 52, width: 28, height: 26)
+        swatchCard.addSubview(swapBtn)
+
+        let bgSwatch = SwatchView(frame: NSRect(x: 8 + swatchW + 36, y: 34, width: swatchW, height: 62))
+        bgSwatch.color = bgMath
+        bgSwatch.titleText = "Arrière-plan · Pipette"
+        bgSwatch.hexText = bgMath.hexString(lowercase: settings.lowercaseHex)
+        bgSwatch.sansFont = NSFont(name: settings.fontSans, size: 11) ?? fontSans
+        bgSwatch.monoFont = fontMono
+        bgSwatch.onLeftClick = { [weak self] in self?.pickColor(isForeground: false) }
+        bgSwatch.onRightClick = { [weak self] in
+            guard let self = self else { return }
+            self.copyToPasteboard(bgMath.hexString(lowercase: self.settings.lowercaseHex), label: "HEX BG")
+        }
+        swatchCard.addSubview(bgSwatch)
+
+        // Contrast strip (numbers in AnthropicSerif-Regular 400, labels in InterVariable 400)
+        let ratio = fgMath.contrastRatio(with: bgMath)
+        let ratioStr = String(format: "%.2f : 1", ratio)
+        let wcagText = ratio >= 7.0 ? "AAA Texte · AA Large" : (ratio >= 4.5 ? "AA Texte · AAA Large" : (ratio >= 3.0 ? "AA Large uniquement" : "Contraste faible"))
+
+        let contrastLabel = makeLabel("Contraste WCAG", font: fontSans, color: .secondaryLabelColor)
+        contrastLabel.frame = NSRect(x: 10, y: 7, width: 110, height: 18)
+        swatchCard.addSubview(contrastLabel)
+
+        let ratioNumberLabel = makeLabel(ratioStr, font: fontSerif, color: .labelColor)
+        ratioNumberLabel.frame = NSRect(x: 118, y: 7, width: 72, height: 18)
+        swatchCard.addSubview(ratioNumberLabel)
+
+        let wcagBadgeLabel = makeLabel(wcagText, font: fontSans, color: ratio >= 4.5 ? .systemGreen : (ratio >= 3.0 ? .systemOrange : .secondaryLabelColor))
+        wcagBadgeLabel.alignment = .right
+        wcagBadgeLabel.frame = NSRect(x: 190, y: 7, width: contentWidth - 200, height: 18)
+        swatchCard.addSubview(wcagBadgeLabel)
+
+        rootStack.addArrangedSubview(swatchCard)
+
+        // 4. FORMAT ROWS (1-click copy, AnthropicMono for literals, InterVariable for labels, AnthropicSerif for numbers)
+        let formats: [(id: String, name: String, code: String, numericBadge: String)] = [
+            ("HEX", "HEX", fgMath.hexString(lowercase: settings.lowercaseHex), "\(fgMath.r255)·\(fgMath.g255)·\(fgMath.b255)"),
+            ("RGB", "RGB", fgMath.rgbString, "\(Int(round(fgMath.relativeLuminance * 100)))% lum"),
+            ("HSL", "HSL", fgMath.hslString, "\(fgMath.hsl.h)°"),
+            ("OKLCH", "OKLCH", fgMath.oklchString(precision: settings.floatPrecision), String(format: "L %.2f", fgMath.oklch.L)),
+            ("LINEAR", "Linear 3D", fgMath.linearString(precision: settings.floatPrecision), "sRGB→Lin")
+        ]
+
+        let formatsCard = CardView(frame: NSRect(x: 0, y: 0, width: contentWidth, height: CGFloat(formats.count * 30 + 8)))
+        formatsCard.fillColor = NSColor.controlBackgroundColor.withAlphaComponent(0.55)
+        formatsCard.radius = 10
+        formatsCard.translatesAutoresizingMaskIntoConstraints = false
+        formatsCard.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+        formatsCard.heightAnchor.constraint(equalToConstant: CGFloat(formats.count * 30 + 8)).isActive = true
+
+        for (idx, item) in formats.enumerated() {
+            let y = CGFloat((formats.count - 1 - idx) * 30 + 4)
+            let rowView = NSView(frame: NSRect(x: 6, y: y, width: contentWidth - 12, height: 28))
+
+            let isDefault = settings.defaultFormat.uppercased() == item.id
+            let nameText = isDefault ? "\(item.name) •" : item.name
+            let lbl = makeLabel(nameText, font: fontSans, color: isDefault ? .labelColor : .secondaryLabelColor)
+            lbl.frame = NSRect(x: 6, y: 5, width: 68, height: 18)
+            rowView.addSubview(lbl)
+
+            let codeLbl = makeLabel(item.code, font: fontMono, color: .labelColor)
+            codeLbl.frame = NSRect(x: 76, y: 5, width: contentWidth - 178, height: 18)
+            rowView.addSubview(codeLbl)
+
+            let numLbl = makeLabel(item.numericBadge, font: fontSerif, color: .tertiaryLabelColor)
+            numLbl.alignment = .right
+            numLbl.frame = NSRect(x: contentWidth - 104, y: 5, width: 58, height: 18)
+            rowView.addSubview(numLbl)
+
+            let copyBtn = NSButton(frame: NSRect(x: contentWidth - 42, y: 2, width: 26, height: 24))
+            copyBtn.bezelStyle = .recessed
+            copyBtn.isBordered = false
+            copyBtn.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copier \(item.name)")
+            copyBtn.toolTip = "Copier \(item.code)"
+            copyBtn.identifier = NSUserInterfaceItemIdentifier(item.id)
+            copyBtn.target = self
+            copyBtn.action = #selector(onCopyFormatRow(_:))
+            rowView.addSubview(copyBtn)
+
+            // Make entire row clickable via transparent button overlay
+            let rowHit = NSButton(frame: NSRect(x: 0, y: 0, width: contentWidth - 12, height: 28))
+            rowHit.isTransparent = true
+            rowHit.title = ""
+            rowHit.toolTip = "Cliquer pour copier \(item.code)"
+            rowHit.identifier = NSUserInterfaceItemIdentifier(item.id)
+            rowHit.target = self
+            rowHit.action = #selector(onCopyFormatRow(_:))
+            rowView.addSubview(rowHit)
+
+            formatsCard.addSubview(rowView)
+        }
+        rootStack.addArrangedSubview(formatsCard)
+
+        // 5. PALETTE HISTORY SECTION (migrated from Pika + new picks)
+        let historyHeader = NSStackView()
+        historyHeader.orientation = .horizontal
+        historyHeader.alignment = .centerY
+        historyHeader.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+
+        let histTitle = makeLabel("Historique & Palette (Clic: FG · Clic droit: BG)", font: fontSans, color: .secondaryLabelColor)
+        let histCount = makeLabel("\(state.history.count)", font: fontSerif, color: .secondaryLabelColor)
+        historyHeader.addArrangedSubview(histTitle)
+        historyHeader.addArrangedSubview(NSView())
+        historyHeader.addArrangedSubview(histCount)
+        rootStack.addArrangedSubview(historyHeader)
+
+        let cols = 10
+        let cellGap: CGFloat = 5
+        let cellW = floor((contentWidth - CGFloat(cols - 1) * cellGap) / CGFloat(cols))
+        let cellH: CGFloat = 22
+        let visibleHistory = Array(state.history.prefix(settings.historyLimit))
+        let rows = max(1, Int(ceil(Double(visibleHistory.count) / Double(cols))))
+        let gridHeight = CGFloat(rows) * cellH + CGFloat(max(0, rows - 1)) * cellGap
+
+        let gridContainer = NSView(frame: NSRect(x: 0, y: 0, width: contentWidth, height: gridHeight))
+        gridContainer.translatesAutoresizingMaskIntoConstraints = false
+        gridContainer.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+        gridContainer.heightAnchor.constraint(equalToConstant: gridHeight).isActive = true
+
+        for (i, hex) in visibleHistory.enumerated() {
+            guard let cMath = ColorMath(hex: hex) else { continue }
+            let r = i / cols
+            let c = i % cols
+            let x = CGFloat(c) * (cellW + cellGap)
+            let y = gridHeight - CGFloat(r + 1) * cellH - CGFloat(r) * cellGap
+            let pill = SwatchView(frame: NSRect(x: x, y: y, width: cellW, height: cellH))
+            pill.color = cMath
+            pill.radius = 6
+            pill.toolTip = "\(hex) (Clic: Premier plan + copier · Clic droit: Arrière-plan)"
+            pill.onLeftClick = { [weak self] in
+                guard let self = self else { return }
+                self.setForeground(hex: hex, copyIfEnabled: self.settings.autoCopyOnPick)
+            }
+            pill.onRightClick = { [weak self] in
+                guard let self = self else { return }
+                self.state.backgroundHex = cMath.hexString(lowercase: self.settings.lowercaseHex)
+                self.saveState()
+                self.rebuildUI()
+            }
+            gridContainer.addSubview(pill)
+        }
+        rootStack.addArrangedSubview(gridContainer)
+
+        // 6. HDA PARAMETRIC CONTROLS (8 parameters max, directly editable by Matthieu without back-and-forth)
+        if showHDAPanel {
+            let hdaCardHeight: CGFloat = 258
+            let hdaCard = CardView(frame: NSRect(x: 0, y: 0, width: contentWidth, height: hdaCardHeight))
+            hdaCard.fillColor = NSColor.controlBackgroundColor.withAlphaComponent(0.75)
+            hdaCard.radius = 10
+            hdaCard.translatesAutoresizingMaskIntoConstraints = false
+            hdaCard.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+            hdaCard.heightAnchor.constraint(equalToConstant: hdaCardHeight).isActive = true
+
+            let hdaTitle = makeLabel("Paramètres HDA", font: fontSerif, color: .labelColor)
+            hdaTitle.frame = NSRect(x: 10, y: hdaCardHeight - 24, width: 160, height: 18)
+            hdaCard.addSubview(hdaTitle)
+
+            let hdaCountBadge = makeLabel("8 paramètres", font: fontSerif, color: .secondaryLabelColor)
+            hdaCountBadge.alignment = .right
+            hdaCountBadge.frame = NSRect(x: contentWidth - 110, y: hdaCardHeight - 24, width: 100, height: 18)
+            hdaCard.addSubview(hdaCountBadge)
+
+            // Parm 1: defaultFormat
+            let p1Lbl = makeLabel("1. Format copié", font: fontSans, color: .secondaryLabelColor)
+            p1Lbl.frame = NSRect(x: 10, y: hdaCardHeight - 52, width: 120, height: 18)
+            hdaCard.addSubview(p1Lbl)
+
+            let fmtPopup = NSPopUpButton(frame: NSRect(x: 135, y: hdaCardHeight - 55, width: contentWidth - 145, height: 24), pullsDown: false)
+            fmtPopup.font = fontSans
+            fmtPopup.addItems(withTitles: ["HEX", "RGB", "HSL", "OKLCH", "LINEAR"])
+            fmtPopup.selectItem(withTitle: settings.defaultFormat.uppercased())
+            fmtPopup.target = self
+            fmtPopup.action = #selector(onChangeDefaultFormat(_:))
+            hdaCard.addSubview(fmtPopup)
+
+            // Parm 2 & 3: autoCopyOnPick & lowercaseHex
+            let p2Check = NSButton(checkboxWithTitle: "2. Copie auto", target: self, action: #selector(onToggleAutoCopy(_:)))
+            p2Check.font = fontSans
+            p2Check.state = settings.autoCopyOnPick ? .on : .off
+            p2Check.frame = NSRect(x: 10, y: hdaCardHeight - 80, width: 140, height: 20)
+            hdaCard.addSubview(p2Check)
+
+            let p3Check = NSButton(checkboxWithTitle: "3. Hex minuscules", target: self, action: #selector(onToggleLowercaseHex(_:)))
+            p3Check.font = fontSans
+            p3Check.state = settings.lowercaseHex ? .on : .off
+            p3Check.frame = NSRect(x: 155, y: hdaCardHeight - 80, width: contentWidth - 165, height: 20)
+            hdaCard.addSubview(p3Check)
+
+            // Parm 4 & 8: floatPrecision & pickOnMenuClick
+            let p4Lbl = makeLabel("4. Décimales 3D", font: fontSans, color: .secondaryLabelColor)
+            p4Lbl.frame = NSRect(x: 10, y: hdaCardHeight - 106, width: 105, height: 18)
+            hdaCard.addSubview(p4Lbl)
+
+            let precSeg = NSSegmentedControl(labels: ["2", "3", "4"], trackingMode: .selectOne, target: self, action: #selector(onChangePrecision(_:)))
+            precSeg.font = fontSerif
+            precSeg.selectedSegment = max(0, min(2, settings.floatPrecision - 2))
+            precSeg.frame = NSRect(x: 118, y: hdaCardHeight - 108, width: 84, height: 22)
+            hdaCard.addSubview(precSeg)
+
+            let p8Check = NSButton(checkboxWithTitle: "8. Pipette directe icône", target: self, action: #selector(onTogglePickOnClick(_:)))
+            p8Check.font = fontSans
+            p8Check.state = settings.pickOnMenuClick ? .on : .off
+            p8Check.frame = NSRect(x: 208, y: hdaCardHeight - 106, width: contentWidth - 214, height: 20)
+            hdaCard.addSubview(p8Check)
+
+            // Parm 5: historyLimit slider
+            let p5Lbl = makeLabel("5. Historique", font: fontSans, color: .secondaryLabelColor)
+            p5Lbl.frame = NSRect(x: 10, y: hdaCardHeight - 134, width: 95, height: 18)
+            hdaCard.addSubview(p5Lbl)
+            let p5Slider = NSSlider(value: Double(settings.historyLimit), minValue: 10, maxValue: 40, target: self, action: #selector(onChangeHistoryLimit(_:)))
+            p5Slider.frame = NSRect(x: 110, y: hdaCardHeight - 134, width: contentWidth - 155, height: 18)
+            hdaCard.addSubview(p5Slider)
+            let p5Val = makeLabel("\(settings.historyLimit)", font: fontSerif, color: .labelColor)
+            p5Val.alignment = .right
+            p5Val.frame = NSRect(x: contentWidth - 42, y: hdaCardHeight - 134, width: 32, height: 18)
+            hdaCard.addSubview(p5Val)
+
+            // Parm 6: windowWidth slider
+            let p6Lbl = makeLabel("6. Largeur UI", font: fontSans, color: .secondaryLabelColor)
+            p6Lbl.frame = NSRect(x: 10, y: hdaCardHeight - 160, width: 95, height: 18)
+            hdaCard.addSubview(p6Lbl)
+            let p6Slider = NSSlider(value: settings.windowWidth, minValue: 320, maxValue: 460, target: self, action: #selector(onChangeWindowWidth(_:)))
+            p6Slider.isContinuous = false
+            p6Slider.frame = NSRect(x: 110, y: hdaCardHeight - 160, width: contentWidth - 155, height: 18)
+            hdaCard.addSubview(p6Slider)
+            let p6Val = makeLabel("\(Int(settings.windowWidth))", font: fontSerif, color: .labelColor)
+            p6Val.alignment = .right
+            p6Val.frame = NSRect(x: contentWidth - 42, y: hdaCardHeight - 160, width: 32, height: 18)
+            hdaCard.addSubview(p6Val)
+
+            // Parm 7: fontSize slider
+            let p7Lbl = makeLabel("7. Corps texte", font: fontSans, color: .secondaryLabelColor)
+            p7Lbl.frame = NSRect(x: 10, y: hdaCardHeight - 186, width: 95, height: 18)
+            hdaCard.addSubview(p7Lbl)
+            let p7Slider = NSSlider(value: settings.fontSize, minValue: 11, maxValue: 16, target: self, action: #selector(onChangeFontSize(_:)))
+            p7Slider.isContinuous = false
+            p7Slider.frame = NSRect(x: 110, y: hdaCardHeight - 186, width: contentWidth - 155, height: 18)
+            hdaCard.addSubview(p7Slider)
+            let p7Val = makeLabel("\(Int(settings.fontSize))", font: fontSerif, color: .labelColor)
+            p7Val.alignment = .right
+            p7Val.frame = NSRect(x: contentWidth - 42, y: hdaCardHeight - 186, width: 32, height: 18)
+            hdaCard.addSubview(p7Val)
+
+            // HDA Footer actions: Copier JSON, Settings.json, Reset, Quitter
+            let copyHdaBtn = makeIconButton(symbol: "doc.on.doc", title: "Copier HDA", toolTip: "Copier les valeurs JSON pour le prompt", action: #selector(onCopyHDAJson))
+            copyHdaBtn.frame = NSRect(x: 10, y: 10, width: 104, height: 24)
+            hdaCard.addSubview(copyHdaBtn)
+
+            let openJsonBtn = makeIconButton(symbol: "slider.horizontal.3", title: "JSON", toolTip: "Ouvrir Settings.json dans le Finder", action: #selector(onOpenSettingsFile))
+            openJsonBtn.frame = NSRect(x: 118, y: 10, width: 68, height: 24)
+            hdaCard.addSubview(openJsonBtn)
+
+            let resetBtn = makeIconButton(symbol: "arrow.counterclockwise", title: "Défaut", toolTip: "Réinitialiser les paramètres HDA", action: #selector(onResetHDA))
+            resetBtn.frame = NSRect(x: 190, y: 10, width: 76, height: 24)
+            hdaCard.addSubview(resetBtn)
+
+            let quitBtn = makeIconButton(symbol: "xmark", title: "Quitter", toolTip: "Quitter ZenRayColorPicker", action: #selector(onQuitApp))
+            quitBtn.frame = NSRect(x: contentWidth - 78, y: 10, width: 68, height: 24)
+            hdaCard.addSubview(quitBtn)
+
+            rootStack.addArrangedSubview(hdaCard)
+        }
+
+        rootStack.layoutSubtreeIfNeeded()
+        let fittingH = rootStack.fittingSize.height
+        let targetW = CGFloat(max(320.0, min(460.0, settings.windowWidth)))
+        let targetH = min(680.0, max(340.0, fittingH))
+        rootStack.frame = NSRect(x: 0, y: 0, width: targetW, height: fittingH)
+        let oldFrame = window.frame
+        let newY = oldFrame.maxY - targetH
+        window.setFrame(NSRect(x: oldFrame.minX, y: newY, width: targetW, height: targetH), display: true)
+    }
+
+    // MARK: - UI Actions
+
+    @objc func onPickForeground() { pickColor(isForeground: true) }
+
+    @objc func onTogglePin() {
+        settings.alwaysOnTop.toggle()
+        window.isFloatingPanel = settings.alwaysOnTop
+        window.level = settings.alwaysOnTop ? .floating : .normal
+        saveSettings()
+        rebuildUI()
+    }
+
+    @objc func onToggleHDA() {
+        showHDAPanel.toggle()
+        rebuildUI()
+    }
+
+    @objc func onSwapColors() {
+        let tmp = state.foregroundHex
+        state.foregroundHex = state.backgroundHex
+        state.backgroundHex = tmp
+        saveState()
+        rebuildUI()
+    }
+
+    @objc func onCopyFormatRow(_ sender: NSButton) {
+        let formatId = sender.identifier?.rawValue ?? "HEX"
+        guard let fgMath = ColorMath(hex: state.foregroundHex) else { return }
+        let val = formattedValue(for: formatId, color: fgMath)
+        copyToPasteboard(val, label: formatId)
+    }
+
+    @objc func onChangeDefaultFormat(_ sender: NSPopUpButton) {
+        if let title = sender.selectedItem?.title {
+            settings.defaultFormat = title
+            saveSettings()
+            rebuildUI()
+        }
+    }
+
+    @objc func onToggleAutoCopy(_ sender: NSButton) {
+        settings.autoCopyOnPick = (sender.state == .on)
+        saveSettings()
+        rebuildUI()
+    }
+
+    @objc func onToggleLowercaseHex(_ sender: NSButton) {
+        settings.lowercaseHex = (sender.state == .on)
+        saveSettings()
+        rebuildUI()
+    }
+
+    @objc func onChangePrecision(_ sender: NSSegmentedControl) {
+        settings.floatPrecision = sender.selectedSegment + 2
+        saveSettings()
+        rebuildUI()
+    }
+
+    @objc func onTogglePickOnClick(_ sender: NSButton) {
+        settings.pickOnMenuClick = (sender.state == .on)
+        saveSettings()
+        rebuildUI()
+    }
+
+    @objc func onChangeHistoryLimit(_ sender: NSSlider) {
+        settings.historyLimit = Int(round(sender.doubleValue))
+        saveSettings()
+        rebuildUI()
+    }
+
+    @objc func onChangeWindowWidth(_ sender: NSSlider) {
+        settings.windowWidth = round(sender.doubleValue)
+        saveSettings()
+        rebuildUI()
+    }
+
+    @objc func onChangeFontSize(_ sender: NSSlider) {
+        settings.fontSize = round(sender.doubleValue)
+        saveSettings()
+        rebuildUI()
+    }
+
+    @objc func onCopyHDAJson() {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(settings), let str = String(data: data, encoding: .utf8) {
+            copyToPasteboard(str, label: "HDA JSON")
+        }
+    }
+
+    @objc func onOpenSettingsFile() {
+        saveSettings()
+        NSWorkspace.shared.activateFileViewerSelecting([userSettingsURL])
+    }
+
+    @objc func onResetHDA() {
+        settings = defaultSettings
+        saveSettings()
+        rebuildUI()
+    }
+
+    @objc func onQuitApp() {
+        NSApp.terminate(nil)
+    }
+
+    // 18 October 2026: Write measured runtime proof and optional window capture PNG.
+    func writeVerificationProof(to proofPath: String, screenshotPath: String?) {
+        let fgMath = ColorMath(hex: state.foregroundHex) ?? ColorMath(hex: "#b62721")!
+        let bgMath = ColorMath(hex: state.backgroundHex) ?? ColorMath(hex: "#1f1f1e")!
+        let ratio = fgMath.contrastRatio(with: bgMath)
+        let wcag = ratio >= 7.0 ? "AAA" : (ratio >= 4.5 ? "AA" : (ratio >= 3.0 ? "AA Large" : "Fail"))
+
+        let payload = ProofPayload(
+            checkedAt: ISO8601DateFormatter().string(from: Date()),
+            bundleId: Bundle.main.bundleIdentifier ?? "com.zenray.colorpicker",
+            windowWidth: Double(window.frame.width),
+            windowHeight: Double(window.frame.height),
+            fontsLoaded: fontsLoaded,
+            resolvedFonts: [
+                "sans": fontSans.fontName,
+                "serif": fontSerif.fontName,
+                "mono": fontMono.fontName
+            ],
+            foregroundHex: fgMath.hexString(lowercase: settings.lowercaseHex),
+            backgroundHex: bgMath.hexString(lowercase: settings.lowercaseHex),
+            formats: [
+                "HEX": fgMath.hexString(lowercase: settings.lowercaseHex),
+                "RGB": fgMath.rgbString,
+                "HSL": fgMath.hslString,
+                "OKLCH": fgMath.oklchString(precision: settings.floatPrecision),
+                "LINEAR": fgMath.linearString(precision: settings.floatPrecision)
+            ],
+            contrastRatio: round(ratio * 100.0) / 100.0,
+            wcagLevel: wcag,
+            historyCount: state.history.count,
+            hdaParameterCount: 8,
+            settingsPath: userSettingsURL.path
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(payload) {
+            try? data.write(to: URL(fileURLWithPath: proofPath), options: .atomic)
+        }
+
+        if let shotPath = screenshotPath, let contentView = window.contentView {
+            let bounds = contentView.bounds
+            if let rep = contentView.bitmapImageRepForCachingDisplay(in: bounds) {
+                contentView.cacheDisplay(in: bounds, to: rep)
+                if let pngData = rep.representation(using: .png, properties: [:]) {
+                    try? pngData.write(to: URL(fileURLWithPath: shotPath), options: .atomic)
+                }
+            }
+        }
+
+        if CommandLine.arguments.contains("--quit-after-proof") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                NSApp.terminate(nil)
+            }
+        }
+    }
+}
+
+let app = NSApplication.shared
+let delegate = ZenRayColorPickerApp()
+app.delegate = delegate
+app.setActivationPolicy(.accessory)
+app.run()
